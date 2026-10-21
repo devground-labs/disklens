@@ -31,10 +31,20 @@ macOS lumps a lot of things into "System Data" and gives you no way to see what'
 - **Explorer**: browse any folder, sorted by size.
 - Light and dark mode, native fonts, fast parallel scanning (a full scan takes about 10–15 seconds).
 
+## Install
+
+1. Download the latest **DiskLens-x.y.z.dmg** from the [Releases page](https://github.com/devground-labs/disklens/releases/latest).
+2. Open the dmg and drag **DiskLens** into **Applications**.
+3. The first time you open it, macOS will say it can't verify the app, because DiskLens isn't notarized by Apple yet. To approve it once:
+   - Open **System Settings › Privacy & Security**, scroll down and click **Open Anyway** next to DiskLens (on older macOS, right-click the app and choose **Open**), or
+   - run `xattr -dr com.apple.quarantine /Applications/DiskLens.app` in Terminal.
+
+You can verify the download against the source: the dmg is built by [this workflow](.github/workflows/release.yml) from the tagged commit.
+
 ## Requirements
 
-- macOS (built and tested on Apple silicon)
-- A recent stable [Rust](https://rustup.rs) toolchain, to build it
+- macOS 11 or later
+- To build from source: a recent stable [Rust](https://rustup.rs) toolchain
 
 ## Build and run
 
@@ -45,11 +55,13 @@ cargo build --release
 ./target/release/disklens
 ```
 
+To make a dmg yourself, run `scripts/package.sh` (add `--universal` for Apple silicon + Intel). The result is in `dist/`.
+
 Closing the window keeps DiskLens running in the menu bar. Use **Quit DiskLens** from the menu-bar icon to exit.
 
 ### Full Disk Access (recommended)
 
-macOS hides some folders (Mail, Messages, other apps' containers) from apps by default, so their sizes are undercounted. To see everything, open **System Settings › Privacy & Security › Full Disk Access** and add the DiskLens binary (or the terminal you launch it from), then scan again.
+macOS hides some folders (Mail, Messages, other apps' containers) from apps by default, so their sizes are undercounted. To see everything, open **System Settings › Privacy & Security › Full Disk Access** and add **DiskLens** (or the terminal you launch it from), then scan again.
 
 ## Where data is stored
 
