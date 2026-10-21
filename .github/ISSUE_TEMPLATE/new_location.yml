@@ -1,0 +1,61 @@
+name: New location or classification
+description: A folder, cache or app that DiskLens doesn't recognise yet, or explains wrongly.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for a cleanup location DiskLens should list, or a folder inside a location (for example in ~/Library/Caches)
+        that it should explain. See CONTRIBUTING.md if you'd like to add it yourself.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is it?
+      options:
+        - A new location (a new row in a category)
+        - A folder DiskLens shows but doesn't explain, or explains wrongly
+    validations:
+      required: true
+  - type: input
+    id: path
+    attributes:
+      label: Path
+      description: Use ~ for your home folder rather than your user name.
+      placeholder: "e.g. ~/Library/Caches/com.example.app"
+    validations:
+      required: true
+  - type: input
+    id: app
+    attributes:
+      label: App or tool it belongs to
+      placeholder: "e.g. Example App, Homebrew, Xcode"
+    validations:
+      required: true
+  - type: dropdown
+    id: safety
+    attributes:
+      label: How safe is it to clear?
+      options:
+        - Safe to clear (rebuilds itself, nothing lost)
+        - Check first (often clearable, but may hold something you want)
+        - Your files (only you can decide)
+        - Leave to macOS (macOS frees it on its own)
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: What is it, and how do you know?
+      description: What the app stores there, what happens when it's cleared, and a source if you have one (for example, the app's own docs).
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command to clear it (optional)
+      placeholder: "e.g. example-tool cache clean"
+  - type: input
+    id: size
+    attributes:
+      label: Typical size (optional)
+      placeholder: "e.g. 2 GB"
