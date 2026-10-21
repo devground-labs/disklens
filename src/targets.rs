@@ -122,7 +122,7 @@ use Safety::*;
 
 pub static TARGETS: &[Target] = &[
     // ---- Caches & junk ----
-    bd(t(Caches, "user-caches", "User caches", &["~/Library/Caches"], Safe, "Caches written by your apps (browsers, package managers, updaters). Apps rebuild them; the first launch after clearing may be slower. Quit an app before clearing its folder. See the breakdown below for what each folder is.", Some("rm -rf ~/Library/Caches/<folder>   # one folder at a time, app quit"))),
+    bd(t(Caches, "user-caches", "User caches", &["~/Library/Caches"], Safe, "Caches written by your apps (browsers, package managers, updaters). Apps rebuild them; the first launch after clearing may be slower. Quit an app before clearing its folder. The Inside tab shows what each folder is.", Some("rm -rf ~/Library/Caches/<folder>   # one folder at a time, app quit"))),
     bd(t(Caches, "sys-caches", "System-wide caches", &["/Library/Caches"], Review, "Shared caches for all users. Mostly safe, but some belong to installers and updaters; clear per folder.", None)),
     bd(t(Caches, "user-logs", "User logs", &["~/Library/Logs"], Safe, "Application logs and crash reports. Only useful for debugging.", Some("rm -rf ~/Library/Logs/*"))),
     bd(special(Caches, "installers", "App installers (.dmg, .pkg)", Safe, Kind::Installers, "Disk images and installer packages in Downloads, Desktop and Documents, plus old \"Install macOS\" apps. Once an app is installed, its installer is only taking up space, and it can be downloaded again any time.", Some("rm ~/Downloads/<file>.dmg"))),
