@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest an idea or improvement for DiskLens.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        DiskLens is read-only by design: it explains what's on the disk and how to clear it, but never deletes anything itself.
+        Requests for built-in delete or "clean up" buttons won't be accepted.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe what you were trying to do and what got in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like DiskLens to do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Optional. Other ways to solve it, or other apps that do something similar.

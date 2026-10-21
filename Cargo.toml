@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["devground-labs"]
 description = "See what's filling your Mac's disk and what's safe to reclaim."
 repository = "https://github.com/devground-labs/disklens"
-license-file = "LICENSE"
+license = "Apache-2.0"
 readme = "README.md"
 publish = false
 

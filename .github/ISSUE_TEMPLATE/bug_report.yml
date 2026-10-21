@@ -1,0 +1,60 @@
+name: Bug report
+description: Something in DiskLens is wrong, crashes or looks broken.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please check that it hasn't been reported already.
+        Screenshots and paths can show personal folder names, so look them over before posting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect to see instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open DiskLens
+        2. Click on ...
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "e.g. macOS 26.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: chip
+    attributes:
+      label: Mac type
+      options:
+        - Apple silicon
+        - Intel
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DiskLens version or commit
+      placeholder: "e.g. 0.1.0 or 7cc942a"
+  - type: dropdown
+    id: fda
+    attributes:
+      label: Does DiskLens have Full Disk Access?
+      options:
+        - "Yes"
+        - "No"
+        - Not sure
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots, logs or anything else
+      description: Optional. Remove anything private first.
