@@ -48,6 +48,16 @@ pub struct Args {
     pub theme: Option<egui::ThemePreference>,
     pub scan: bool,
     pub group: Option<usize>,
+    /// Inspector tab: overview, inside or clear.
+    pub tab: Option<String>,
+}
+
+/// Inspector sections.
+#[derive(PartialEq, Clone, Copy)]
+enum Tab {
+    About,
+    Inside,
+    Clear,
 }
 
 pub struct App {
@@ -64,6 +74,10 @@ pub struct App {
     search: String,
     sort: (Col, bool), // (column, descending)
     selected: Option<&'static str>,
+    tab: Tab,
+    /// Folder expanded in the inspector's "Inside" list.
+    open_item: Option<String>,
+    fda_hidden: bool,
     explore_path: PathBuf,
     explore: Arc<Mutex<ExploreState>>,
     explore_started: bool,
@@ -150,11 +164,6 @@ fn safety_pill(ui: &mut egui::Ui, s: Safety, p: &Pal) {
     pill(ui, s.label(), fg, bg).on_hover_text(s.explain());
 }
 
-fn dot(ui: &mut egui::Ui, color: Color32) {
-    let (r, _) = ui.allocate_exact_size(Vec2::splat(10.0), Sense::hover());
-    ui.painter().circle_filled(r.center(), 4.5, color);
-}
-
 fn bar(ui: &mut egui::Ui, p: &Pal, frac: f32, color: Color32) {
     let w = ui.available_width().max(20.0) - 8.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 6.0), Sense::hover());
@@ -178,38 +187,79 @@ fn stacked(ui: &mut egui::Ui, p: &Pal, parts: &[(Color32, u64, &str)]) {
         x += w;
     }
     ui.add_space(2.0);
-    for (c, b, label) in parts.iter().filter(|x| x.1 > 0) {
-        ui.horizontal(|ui| {
-            dot(ui, *c);
-            ui.label(RichText::new(*label).size(12.0).color(p.muted));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(fmt_bytes(*b)).monospace().size(12.0)));
-        });
+    // Compact legend that wraps; exact share on hover.
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (c, b, label) in parts.iter().filter(|x| x.1 > 0) {
+            let mut job = egui::text::LayoutJob::default();
+            let fmt = |c: Color32, mono: bool| egui::TextFormat { font_id: if mono { egui::FontId::monospace(11.0) } else { egui::FontId::proportional(11.5) }, color: c, ..Default::default() };
+            job.append("● ", 0.0, fmt(*c, false));
+            job.append(label, 0.0, fmt(p.muted, false));
+            job.append(&format!(" {}", fmt_bytes(*b)), 0.0, fmt(p.text, true));
+            ui.add(egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend)).on_hover_text(format!("{:.0}%", *b as f32 * 100.0 / total as f32));
+            ui.add_space(8.0);
+        }
+    });
+}
+
+/// A small "?" that shows `text` on hover: keeps explanations reachable without crowding the view.
+fn help(ui: &mut egui::Ui, p: &Pal, text: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+    let c = if resp.hovered() { p.text } else { p.muted };
+    ui.painter().circle_stroke(rect.center(), 6.5, Stroke::new(1.0, c));
+    ui.painter().text(rect.center() + Vec2::new(0.0, 0.5), egui::Align2::CENTER_CENTER, "?", egui::FontId::proportional(10.0), c);
+    resp.on_hover_text(text)
+}
+
+/// Status, size, reclaimable and 7-day columns; name and share take the rest.
+const FIXED_COLS: f32 = 118.0 + 90.0 + 104.0 + 84.0;
+
+struct Layout3 {
+    wide: bool,
+    name_w: f32,
+    share_w: f32,
+}
+
+/// The overview table's columns, shared by the header and every category card.
+fn columns<'a>(tb: TableBuilder<'a>, l: &Layout3) -> TableBuilder<'a> {
+    let mut tb = tb
+        .striped(false)
+        .resizable(false)
+        .vscroll(false)
+        .cell_layout(Layout::left_to_right(Align::Center))
+        .column(Column::exact(l.name_w).clip(true))
+        .column(Column::exact(118.0))
+        .column(Column::exact(90.0))
+        .column(Column::exact(104.0));
+    if l.wide {
+        tb = tb.column(Column::exact(l.share_w));
+    }
+    tb.column(Column::exact(84.0))
+}
+
+/// Segmented tab control spanning the available width.
+fn segmented(ui: &mut egui::Ui, p: &Pal, tabs: &[(Tab, &str)], cur: &mut Tab) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), Sense::hover());
+    ui.painter().rect_filled(rect, 8.0, p.window);
+    let w = rect.width() / tabs.len() as f32;
+    for (i, (tab, label)) in tabs.iter().enumerate() {
+        let r = egui::Rect::from_min_size(rect.min + Vec2::new(w * i as f32, 0.0), Vec2::new(w, rect.height())).shrink(2.0);
+        let resp = ui.interact(r, ui.scope_id().with(("tab", i)), Sense::click());
+        let on = *cur == *tab;
+        if on {
+            ui.painter().rect(r, 6.0, p.card, Stroke::new(1.0, p.border), egui::StrokeKind::Inside);
+        } else if resp.hovered() {
+            ui.painter().rect_filled(r, 6.0, p.hover);
+        }
+        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, *label, egui::FontId::proportional(12.5), if on { p.text } else { p.muted });
+        if resp.clicked() {
+            *cur = *tab;
+        }
     }
 }
 
 fn trend_color(pts: &[u64], p: &Pal) -> Color32 {
     if pts.last() > pts.first() { p.bad } else { p.good }
-}
-
-fn sparkline(ui: &mut egui::Ui, p: &Pal, pts: &[u64], size: Vec2) {
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    if pts.len() < 2 {
-        ui.painter().line_segment([rect.left_center(), rect.right_center()], Stroke::new(1.0, p.track));
-        return;
-    }
-    let (mn, mx) = (*pts.iter().min().unwrap() as f32, *pts.iter().max().unwrap() as f32);
-    let rng = (mx - mn).max(1.0);
-    let line: Vec<Pos2> = pts
-        .iter()
-        .enumerate()
-        .map(|(i, v)| {
-            egui::pos2(
-                rect.left() + 1.0 + (rect.width() - 2.0) * i as f32 / (pts.len() - 1) as f32,
-                rect.bottom() - 3.0 - (*v as f32 - mn) / rng * (rect.height() - 6.0),
-            )
-        })
-        .collect();
-    ui.painter().add(egui::Shape::line(line, Stroke::new(1.6, trend_color(pts, p))));
 }
 
 /// Larger area chart with min/max labels, for the inspector.
@@ -334,7 +384,6 @@ struct Row {
     bytes: u64,
     note: Option<String>,
     d7: Option<i64>,
-    series: Vec<u64>,
     reclaim: u64,
     sub: String,
     leftovers: usize,
@@ -419,6 +468,13 @@ impl App {
             search: args.search.clone().unwrap_or_default(),
             sort: (Col::Size, true),
             selected: args.select.as_deref().and_then(|id| targets::find(id)).map(|t| t.id),
+            tab: match args.tab.as_deref() {
+                Some("inside") => Tab::Inside,
+                Some("clear") => Tab::Clear,
+                _ => Tab::About,
+            },
+            open_item: None,
+            fda_hidden: false,
             explore_path: dirs::home_dir().unwrap_or_else(|| "/".into()),
             explore: Arc::new(Mutex::new(ExploreState::Idle)),
             explore_started: false,
@@ -498,7 +554,7 @@ impl App {
                     return None;
                 }
                 let (_, d7) = self.deltas(t.id);
-                Some(Row { t, bytes: r.bytes, note: r.note.clone(), d7, series: self.series_ts(t.id).iter().map(|x| x.1).collect(), reclaim: reclaimable(t, r), sub: subtitle(t, r), leftovers: leftover_count(t, r) })
+                Some(Row { t, bytes: r.bytes, note: r.note.clone(), d7, reclaim: reclaimable(t, r), sub: subtitle(t, r), leftovers: leftover_count(t, r) })
             })
             .collect();
         let (col, desc) = self.sort;
@@ -676,35 +732,51 @@ impl App {
             ui.allocate_ui(Vec2::new(right_w, 0.0), |ui| {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 12.0;
+                    let titled = |ui: &mut egui::Ui, title: &str, tip: &str| {
+                        ui.horizontal(|ui| {
+                            caption(ui, p, title);
+                            help(ui, p, tip);
+                        });
+                    };
                     card(ui, p, |ui| {
-                        ui.set_min_height(50.0);
-                        caption(ui, p, "Likely safe to reclaim");
-                        ui.label(RichText::new(fmt_bytes(safe)).size(24.0).strong().color(p.good));
-                        ui.label(RichText::new("Caches, installers, leftovers and build output").size(12.0).color(p.muted));
+                        ui.set_min_height(64.0);
+                        titled(ui, "Likely safe to reclaim", "Caches, installers, leftovers from removed apps and build output: things that rebuild themselves or aren't needed any more.");
+                        ui.label(RichText::new(fmt_bytes(safe)).size(26.0).strong().color(p.good));
                     });
                     card(ui, p, |ui| {
-                        ui.set_min_height(50.0);
-                        caption(ui, p, "Change since last scan");
+                        ui.set_min_height(64.0);
+                        titled(ui, "Change since last scan", "Growth or shrinkage across all tracked locations since the previous scan.");
                         match growth {
                             Some(g) => {
                                 let (s, c) = fmt_delta(g, p);
-                                ui.label(RichText::new(s).size(24.0).strong().color(c));
-                                ui.label(RichText::new("Across tracked locations").size(12.0).color(p.muted));
+                                ui.label(RichText::new(s).size(26.0).strong().color(c));
                             }
                             None => {
-                                ui.label(RichText::new("No baseline yet").size(18.0).strong().color(p.muted));
-                                ui.label(RichText::new("Run another scan later to see growth").size(12.0).color(p.muted));
+                                ui.label(RichText::new("No baseline yet").size(18.0).strong().color(p.muted)).on_hover_text("Run another scan later to see growth.");
                             }
                         }
                     });
                 });
             });
         });
-        if denied {
+        if denied && !self.fda_hidden {
             ui.add_space(4.0);
-            egui::Frame::new().fill(p.warn.gamma_multiply(0.15)).corner_radius(8.0).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
+            egui::Frame::new().fill(p.warn.gamma_multiply(0.12)).corner_radius(8.0).inner_margin(egui::Margin::symmetric(12, 5)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new("Some folders couldn't be read, so sizes may be undercounted. Grant Full Disk Access in System Settings › Privacy & Security, then scan again.").size(12.5).color(p.warn));
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Some folders couldn't be read, so sizes may be low.").size(12.0).color(p.warn));
+                    help(ui, p, "macOS blocks some folders unless DiskLens has Full Disk Access.\nGrant it in System Settings › Privacy & Security › Full Disk Access, then scan again.");
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let (r, resp) = ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
+                        let c = if resp.hovered() { p.text } else { p.warn };
+                        let k = r.shrink(5.0);
+                        ui.painter().line_segment([k.left_top(), k.right_bottom()], Stroke::new(1.4, c));
+                        ui.painter().line_segment([k.right_top(), k.left_bottom()], Stroke::new(1.4, c));
+                        if resp.on_hover_text("Hide until next launch").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                            self.fda_hidden = true;
+                        }
+                    });
+                });
             });
         }
         if let Some(g) = open {
@@ -727,7 +799,10 @@ impl App {
         card(ui, p, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    caption(ui, p, "Total in this category");
+                    ui.horizontal(|ui| {
+                        caption(ui, p, "Total in this category");
+                        help(ui, p, g.blurb());
+                    });
                     ui.label(RichText::new(fmt_bytes(total)).size(24.0).strong());
                 });
                 ui.add_space(24.0);
@@ -736,60 +811,42 @@ impl App {
                     ui.label(RichText::new(fmt_bytes(safe)).size(24.0).strong().color(p.good));
                 });
             });
-            ui.add_space(4.0);
-            ui.label(RichText::new(g.blurb()).color(p.muted));
-            ui.add_space(8.0);
+            ui.add_space(10.0);
             stacked(ui, p, &Safety::ALL.iter().zip(by).map(|(s, b)| (theme::badge_colors(*s, p).0, b, s.label())).collect::<Vec<_>>());
         });
     }
 
     fn table(&mut self, ui: &mut egui::Ui, p: &Pal, latest: &Snapshot) {
-        // Filter chips
+        // Filter chips. What each status means lives on hover and behind the "?".
         ui.horizontal(|ui| {
-            let chip = |ui: &mut egui::Ui, on: bool, text: String, color: Option<Color32>| -> bool {
+            let chip = |ui: &mut egui::Ui, on: bool, text: String, color: Option<Color32>| -> egui::Response {
                 let (fg, bg) = if on { (Color32::WHITE, p.accent) } else { (p.text, p.hover) };
                 let r = ui.add(egui::Button::new(RichText::new(text).size(12.5).color(fg)).fill(bg).stroke(Stroke::NONE).corner_radius(14.0).min_size(Vec2::new(0.0, 24.0)));
                 if let (Some(c), false) = (color, on) {
                     let pos = r.rect.left_center() + Vec2::new(8.0, 0.0);
                     ui.painter().circle_filled(pos, 3.0, c);
                 }
-                r.clicked()
+                r
             };
             let in_group = |id: &str| targets::find(id).is_some_and(|t| self.group.is_none_or(|g| g == t.group));
             let all = latest.targets.iter().filter(|r| in_group(&r.id)).count();
-            if chip(ui, self.filter.is_none(), format!("All  {all}"), None) {
+            if chip(ui, self.filter.is_none(), format!("All  {all}"), None).clicked() {
                 self.filter = None;
             }
             for s in Safety::ALL {
                 let n = latest.targets.iter().filter(|r| in_group(&r.id) && targets::find(&r.id).is_some_and(|t| t.safety == s)).count();
                 if n > 0 {
                     let dotc = theme::badge_colors(s, p).0;
-                    if chip(ui, self.filter == Some(s), format!("   {}  {n}", s.label()), Some(dotc)) {
+                    if chip(ui, self.filter == Some(s), format!("   {}  {n}", s.label()), Some(dotc)).on_hover_text(s.explain()).clicked() {
                         self.filter = Some(s);
                     }
                 }
             }
+            ui.add_space(2.0);
+            let legend: Vec<String> = Safety::ALL.iter().map(|s| format!("{}: {}", s.label(), s.explain())).collect();
+            help(ui, p, &format!("What the statuses mean\n\n{}", legend.join("\n\n")));
         });
-        ui.add_space(2.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            for s in Safety::ALL {
-                let short = match s {
-                    Safety::Safe => "rebuilds itself, nothing lost",
-                    Safety::Review => "look inside before deleting",
-                    Safety::Careful => "only you can decide",
-                    Safety::System => "macOS frees it on its own",
-                };
-                let mut job = egui::text::LayoutJob::default();
-                let fmt = |c: Color32| egui::TextFormat { font_id: egui::FontId::proportional(11.5), color: c, ..Default::default() };
-                job.append("● ", 0.0, fmt(theme::badge_colors(s, p).0));
-                job.append(s.label(), 0.0, fmt(p.text));
-                job.append(&format!(" — {short}"), 0.0, fmt(p.muted));
-                ui.add(egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend)).on_hover_text(s.explain());
-                ui.add_space(12.0);
-            }
-        });
-        ui.add_space(6.0);
+        ui.add_space(10.0);
 
         let rows = self.rows(latest);
         let max = rows.iter().map(|r| r.bytes).max().unwrap_or(1).max(1);
@@ -819,7 +876,7 @@ impl App {
         let sort_hdr = |ui: &mut egui::Ui, label: &str, col: Col, right: bool, pad: f32, new_sort: &mut (Col, bool)| {
             let active = sort.0 == col;
             let arrow = if active { if sort.1 { " ↓" } else { " ↑" } } else { "" };
-            let text = RichText::new(format!("{label}{arrow}")).size(11.5).color(if active { p.text } else { p.muted });
+            let text = RichText::new(format!("{label}{arrow}")).size(11.0).color(if active { p.text } else { p.muted });
             let go = |ui: &mut egui::Ui| ui.add(egui::Label::new(text).sense(Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
             let hit = if right {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -834,130 +891,96 @@ impl App {
                 *new_sort = if active { (col, !sort.1) } else { (col, true) };
             }
         };
-        let head = |ui: &mut egui::Ui, text: &str, right: bool| {
-            let l = RichText::new(text).size(11.5).color(p.muted);
+        let head = |ui: &mut egui::Ui, text: &str, right: bool, tip: &str| {
+            let l = RichText::new(text).size(11.0).color(p.muted);
             if right {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(l));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(l).on_hover_text(tip));
             } else {
-                ui.label(l);
+                ui.label(l).on_hover_text(tip);
             }
         };
-        let quiet_delta = |ui: &mut egui::Ui, d: Option<i64>, pad: f32| {
+        let quiet_delta = |ui: &mut egui::Ui, d: Option<i64>| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.add_space(pad);
+                ui.add_space(12.0);
                 match d.map(|d| fmt_delta(d, p)) {
                     Some((s, c)) if s != "~0" => ui.label(RichText::new(s).monospace().size(12.0).color(c)),
                     _ => ui.label(RichText::new("—").color(p.muted.gamma_multiply(0.6))),
                 }
             });
         };
+        // Cards and the header share one frame shape so the columns line up.
+        let frame = |fill: Color32, stroke: Color32| egui::Frame::new().fill(fill).stroke(Stroke::new(1.0, stroke)).corner_radius(12.0).inner_margin(egui::Margin::symmetric(4, 2));
+        let layout = |avail: f32| -> Layout3 {
+            let wide = avail > 880.0; // room for the share bar
+            let rest = (avail - FIXED_COLS).max(220.0);
+            let share_w = if wide { (rest * 0.25).clamp(90.0, 200.0) } else { 0.0 };
+            Layout3 { wide, name_w: rest - share_w, share_w }
+        };
+
+        // Column headers, once for all categories.
+        frame(Color32::TRANSPARENT, Color32::TRANSPARENT).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let l = layout(ui.available_width() - 2.0);
+            ui.spacing_mut().item_spacing.x = 0.0;
+            columns(TableBuilder::new(ui).id_salt("tracked-head"), &l).header(22.0, |mut h| {
+                h.col(|ui| {
+                    ui.add_space(10.0);
+                    sort_hdr(ui, "LOCATION", Col::Name, false, 0.0, &mut new_sort)
+                });
+                h.col(|ui| head(ui, "STATUS", false, "Can you clear it? Hover a status for what it means."));
+                h.col(|ui| sort_hdr(ui, "SIZE", Col::Size, true, 0.0, &mut new_sort));
+                h.col(|ui| head(ui, "RECLAIMABLE", true, "Space you can get back without losing anything: rebuilds itself, or left over from an uninstalled app."));
+                if l.wide {
+                    h.col(|ui| {
+                        ui.add_space(18.0);
+                        head(ui, "SHARE", false, "Size compared with the largest row.");
+                    });
+                }
+                h.col(|ui| sort_hdr(ui, "7 DAYS", Col::Growth, true, 12.0, &mut new_sort));
+            })
+            .body(|_| {});
+        });
 
         for (si, (head_info, idx)) in sections.iter().enumerate() {
         if let Some((g, tot, rec)) = head_info {
-            ui.add_space(if si == 0 { 4.0 } else { 20.0 });
+            ui.add_space(if si == 0 { 2.0 } else { 18.0 });
             ui.horizontal(|ui| {
-                let (bar_r, _) = ui.allocate_exact_size(Vec2::new(4.0, 34.0), Sense::hover());
+                let (bar_r, _) = ui.allocate_exact_size(Vec2::new(4.0, 18.0), Sense::hover());
                 ui.painter().rect_filled(bar_r, 2.0, group_color(*g));
-                ui.add_space(6.0);
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.label(RichText::new(g.label()).size(16.0).strong());
-                    ui.label(RichText::new(g.blurb()).size(12.0).color(p.muted));
-                });
+                ui.add_space(4.0);
+                ui.label(RichText::new(g.label()).size(15.0).strong());
+                help(ui, p, g.blurb());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Open ›").on_hover_text("Show only this category").clicked() {
+                    if ui.small_button("Open ›").on_hover_text("Show only this category").clicked() {
                         open_group = Some(*g);
                     }
-                    ui.add_space(14.0);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 1.0;
-                        ui.with_layout(Layout::top_down(Align::Max), |ui| {
-                            ui.label(RichText::new(fmt_bytes(*tot)).size(15.0).strong());
-                            if *rec > 0 {
-                                ui.label(RichText::new(format!("{} safe to clear", fmt_bytes(*rec))).size(12.0).color(p.good));
-                            } else {
-                                ui.label(RichText::new("nothing safe to auto-clear").size(12.0).color(p.muted));
-                            }
-                        });
-                    });
+                    ui.add_space(10.0);
+                    if *rec > 0 {
+                        ui.label(RichText::new(format!("{} safe to clear", fmt_bytes(*rec))).size(12.0).color(p.good));
+                        ui.label(RichText::new("·").color(p.muted));
+                    }
+                    ui.label(RichText::new(fmt_bytes(*tot)).size(13.5).strong());
                 });
             });
-            ui.add_space(8.0);
+            ui.add_space(6.0);
         }
-        egui::Frame::new().fill(p.card).stroke(Stroke::new(1.0, p.border)).corner_radius(12.0).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
+        frame(p.card, p.border).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let avail = ui.available_width() - 2.0;
-            let wide = avail > 880.0; // room for the trend sparkline
-            // Narrow windows drop Share and Trend so the plain-language line has room.
-            let fixed = 118.0 + 84.0 + 98.0 + 80.0 + if wide { 72.0 } else { 0.0 };
-            let rest = (avail - fixed).max(220.0);
-            let share_w = if wide { (rest * 0.3).clamp(104.0, 240.0) } else { 0.0 };
-            let name_w = rest - share_w;
-            let row_h = if wide { 50.0 } else { 62.0 };
+            let l = layout(ui.available_width() - 2.0);
             ui.spacing_mut().item_spacing.x = 0.0;
-            let mut tb = TableBuilder::new(ui)
-                .id_salt(("tracked", si))
-                .striped(false)
-                .resizable(false)
-                .vscroll(false)
-                .sense(Sense::click())
-                .cell_layout(Layout::left_to_right(Align::Center))
-                .column(Column::exact(name_w).clip(true))
-                .column(Column::exact(118.0))
-                .column(Column::exact(84.0))
-                .column(Column::exact(98.0));
-            if wide {
-                tb = tb.column(Column::exact(share_w));
-            }
-            tb = tb.column(Column::exact(80.0));
-            if wide {
-                tb = tb.column(Column::exact(72.0));
-            }
-            tb.header(32.0, |mut h| {
-                    h.col(|ui| {
-                        ui.add_space(10.0);
-                        sort_hdr(ui, "LOCATION", Col::Name, false, 0.0, &mut new_sort)
-                    });
-                    h.col(|ui| head(ui, "STATUS", false));
-                    h.col(|ui| sort_hdr(ui, "SIZE", Col::Size, true, 0.0, &mut new_sort));
-                    h.col(|ui| head(ui, "RECLAIMABLE", true));
-                    if wide {
-                        h.col(|ui| {
-                            ui.add_space(18.0);
-                            head(ui, "SHARE", false);
-                        });
-                    }
-                    h.col(|ui| {
-                        sort_hdr(ui, "7 DAYS", Col::Growth, true, if wide { 0.0 } else { 10.0 }, &mut new_sort);
-                    });
-                    if wide { h.col(|ui| {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.add_space(10.0);
-                            ui.label(RichText::new("TREND").size(11.5).color(p.muted))
-                        });
-                    }); }
-                })
-                .body(|mut body| {
+            columns(TableBuilder::new(ui).id_salt(("tracked", si)).sense(Sense::click()), &l).body(|mut body| {
                     for i in idx {
-                            body.row(row_h, |mut row| {
+                            body.row(40.0, |mut row| {
                                 let r = &rows[*i];
                                 row.set_selected(selected == Some(r.t.id));
                                 row.col(|ui| {
                                     ui.add_space(10.0);
-                                    ui.vertical(|ui| {
-                                        ui.spacing_mut().item_spacing.y = 1.0;
-                                        ui.set_max_width(ui.available_width() - 14.0);
-                                        ui.add_space(if wide { 7.0 } else { 6.0 });
-                                        ui.horizontal(|ui| {
-                                            ui.label(RichText::new(r.t.name).size(13.5));
-                                            if r.leftovers > 0 {
-                                                ui.add_space(6.0);
-                                                ui.label(RichText::new(format!("{} from removed apps", r.leftovers)).size(11.0).color(LEFTOVER));
-                                            }
-                                        });
-                                        let b = egui::Label::new(RichText::new(targets::blurb(r.t.id)).size(11.5).color(p.muted));
-                                        ui.add(if wide { b.truncate() } else { b.wrap() });
-                                    });
+                                    ui.add(egui::Label::new(RichText::new(r.t.name).size(13.5)).truncate());
+                                    if r.leftovers > 0 {
+                                        ui.add_space(8.0);
+                                        ui.label(RichText::new(format!("{} leftover", r.leftovers)).size(11.0).color(LEFTOVER))
+                                            .on_hover_text(format!("{} folders here belong to apps that are no longer installed.", r.leftovers));
+                                    }
                                 });
                                 row.col(|ui| safety_pill(ui, r.t.safety, p));
                                 row.col(|ui| {
@@ -978,31 +1001,21 @@ impl App {
                                         }
                                     });
                                 });
-                                if wide { row.col(|ui| {
+                                if l.wide { row.col(|ui| {
                                     ui.add_space(18.0);
-                                    let pct = r.bytes as f64 * 100.0 / used as f64;
-                                    let label = if pct >= 1.0 { format!("{pct:.0}%") } else if r.bytes > 0 { "<1%".into() } else { String::new() };
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        ui.add_space(14.0);
-                                        ui.add_sized(Vec2::new(34.0, 16.0), egui::Label::new(RichText::new(label).size(11.5).color(p.muted)));
-                                        ui.add_space(6.0);
-                                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| bar(ui, p, r.bytes as f32 / max as f32, if r.t.nested { p.muted } else { p.accent }));
-                                    });
+                                    bar(ui, p, r.bytes as f32 / max as f32, if r.t.nested { p.muted } else { p.accent.gamma_multiply(0.8) });
                                 }); }
-                                row.col(|ui| {
-                                    quiet_delta(ui, r.d7, if wide { 0.0 } else { 10.0 });
-                                });
-                                if wide { row.col(|ui| {
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        ui.add_space(10.0);
-                                        sparkline(ui, p, &r.series, Vec2::new(54.0, 20.0));
-                                    });
-                                }); }
+                                row.col(|ui| quiet_delta(ui, r.d7));
                                 let resp = row.response();
                                 if resp.clicked() {
                                     clicked = Some(r.t.id);
                                 }
-                                let mut tip = format!("{}\n\n{}", r.t.desc, r.t.safety.explain());
+                                let pct = r.bytes as f64 * 100.0 / used as f64;
+                                let share = if pct >= 1.0 { format!("{pct:.0}% of used space") } else { "under 1% of used space".into() };
+                                let mut tip = format!("{}\n{}", targets::blurb(r.t.id), share);
+                                if r.t.nested {
+                                    tip += "\nAlready counted inside another row, so not added to totals.";
+                                }
                                 if !r.sub.is_empty() {
                                     tip += &format!("\n\n{}", r.sub);
                                 }
@@ -1021,9 +1034,13 @@ impl App {
         if let Some(id) = clicked {
             self.selected = if self.selected == Some(id) { None } else { Some(id) };
             self.show_all_items = false;
+            self.open_item = None;
         }
-        ui.add_space(6.0);
-        ui.label(RichText::new("Sizes are allocated blocks, like `du`. Grey bars overlap other rows (e.g. Application Support contains the app rows) and aren't counted in totals. Reclaimable = regenerates on its own or left over from an uninstalled app. This app never deletes anything.").size(11.5).color(p.muted));
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("DiskLens never deletes anything.").size(11.5).color(p.muted));
+            help(ui, p, "Sizes are allocated blocks, like `du`.\nGrey bars overlap other rows (e.g. Application Support contains the app rows) and aren't counted in totals.\nReclaimable = rebuilds itself, or left over from an uninstalled app.");
+        });
     }
 
     fn inspector(&mut self, ui: &mut egui::Ui, p: &Pal, latest: &Snapshot) {
@@ -1031,92 +1048,126 @@ impl App {
             ui.add_space(60.0);
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new("No selection").size(15.0).strong());
-                ui.label(RichText::new("Select a location to see what it is,\nwhether it's safe to clear, and how\nto reclaim the space.\n\nTip: hover over any row or status\nfor a plain-language explanation.").color(p.muted));
+                ui.add_space(2.0);
+                ui.label(RichText::new("Pick a location to see what it is\nand how to clear it.").color(p.muted));
             });
             return;
         };
         let res = latest.targets.iter().find(|r| r.id == t.id);
         let series = self.series_ts(t.id);
         let (d1, d7) = self.deltas(t.id);
+        let has_items = res.is_some_and(|r| r.items.iter().any(|it| it.bytes > 0 || !t.breakdown));
+        if self.tab == Tab::Inside && !has_items {
+            self.tab = Tab::About;
+        }
         let mut explore_to: Option<PathBuf> = None;
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.add_space(14.0);
-            ui.label(RichText::new(t.name).size(17.0).strong());
-            ui.add_space(2.0);
-            safety_pill(ui, t.safety, p);
-            ui.add_space(6.0);
-            ui.label(RichText::new(fmt_bytes(res.map_or(0, |r| r.bytes))).size(30.0).strong());
-            ui.horizontal(|ui| {
-                for (label, d) in [("vs last scan", d1), ("7 days", d7)] {
-                    if let Some(d) = d {
-                        let (s, c) = fmt_delta(d, p);
-                        ui.label(RichText::new(s).color(c).strong());
-                        ui.label(RichText::new(label).size(12.0).color(p.muted));
-                        ui.add_space(6.0);
-                    }
-                }
-            });
-            ui.add_space(6.0);
-            chart(ui, p, &series);
-            ui.add_space(10.0);
-            ui.label(RichText::new(t.desc).color(p.text));
-            if res.is_some_and(|r| r.denied) {
-                ui.add_space(4.0);
-                ui.label(RichText::new("Part of this folder couldn't be read; the real size is larger.").size(12.0).color(p.warn));
-            }
-            if !t.paths.is_empty() {
-                ui.add_space(12.0);
-                caption(ui, p, "Locations");
-                for path in t.paths {
-                    let full = targets::expand(path);
-                    if !full.exists() {
-                        continue;
-                    }
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(full.to_string_lossy()).monospace().size(11.5).color(p.muted)).truncate());
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.small_button("Reveal").clicked() {
-                                reveal(&full);
-                            }
-                        });
+
+        // Fixed header: what it is, how big, can I clear it.
+        ui.add_space(14.0);
+        ui.add(egui::Label::new(RichText::new(t.name).size(17.0).strong()).truncate());
+        ui.add_space(2.0);
+        safety_pill(ui, t.safety, p);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(fmt_bytes(res.map_or(0, |r| r.bytes))).size(28.0).strong());
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if let Some(d) = d7 {
+                    let (s, c) = fmt_delta(d, p);
+                    ui.label(RichText::new("7 days").size(11.5).color(p.muted));
+                    ui.label(RichText::new(s).size(12.5).color(c)).on_hover_text(match d1 {
+                        Some(d1) => format!("{} since the last scan", fmt_delta(d1, p).0),
+                        None => String::new(),
                     });
                 }
-            }
-            if let Some(cmd) = t.cmd {
-                ui.add_space(12.0);
-                caption(ui, p, "How to reclaim");
-                egui::Frame::new().fill(p.window).stroke(Stroke::new(1.0, p.border)).corner_radius(8.0).inner_margin(10).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.label(RichText::new(cmd).monospace().size(12.0));
-                });
-                if ui.button("Copy command").clicked() {
-                    ui.ctx().copy_text(cmd.to_string());
-                }
-            }
-            if let Some(r) = res.filter(|r| !r.items.is_empty()) {
-                if t.breakdown {
-                    self.breakdown(ui, p, t, r);
-                } else {
+            });
+        });
+        if res.is_some_and(|r| r.denied) {
+            ui.label(RichText::new("Real size is larger").size(12.0).color(p.warn)).on_hover_text("Part of this folder couldn't be read without Full Disk Access.");
+        }
+        ui.add_space(8.0);
+        let mut tabs = vec![(Tab::About, "Overview")];
+        if has_items {
+            tabs.push((Tab::Inside, if t.breakdown { "Inside" } else { "Largest" }));
+        }
+        tabs.push((Tab::Clear, "How to clear"));
+        segmented(ui, p, &tabs, &mut self.tab);
+        ui.add_space(10.0);
+
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            match self.tab {
+                Tab::About => {
+                    chart(ui, p, &series);
                     ui.add_space(12.0);
-                    caption(ui, p, "Largest items");
-                    for it in r.items.iter().take(12) {
-                        ui.horizontal(|ui| {
-                            if it.bytes > 0 {
-                                ui.label(RichText::new(fmt_bytes(it.bytes)).monospace().size(11.5));
-                                if ui.add(egui::Label::new(RichText::new(tilde(&it.path)).size(11.5).color(p.accent)).truncate().sense(Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-                                    reveal(Path::new(&it.path));
-                                }
-                            } else {
-                                ui.label(RichText::new(&it.path).monospace().size(11.0).color(p.muted));
-                            }
-                        });
+                    ui.label(RichText::new(t.desc).size(13.0).color(p.text));
+                    let found: Vec<PathBuf> = t.paths.iter().map(|x| targets::expand(x)).filter(|x| x.exists()).collect();
+                    if !found.is_empty() {
+                        ui.add_space(14.0);
+                        caption(ui, p, "Location");
+                        for full in &found {
+                            ui.horizontal(|ui| {
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if ui.small_button("Reveal").on_hover_text("Show in Finder").clicked() {
+                                        reveal(full);
+                                    }
+                                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                        ui.add(egui::Label::new(RichText::new(tilde(&full.to_string_lossy())).monospace().size(11.5).color(p.muted)).truncate());
+                                    });
+                                });
+                            });
+                        }
+                    }
+                    if let Some(first) = t.paths.first() {
+                        ui.add_space(10.0);
+                        if ui.button("Explore folder").clicked() {
+                            explore_to = Some(targets::expand(first));
+                        }
                     }
                 }
-            }
-            if let Some(first) = t.paths.first() {
-                ui.add_space(14.0);
-                if ui.button("Explore folder").clicked() {
-                    explore_to = Some(targets::expand(first));
+                Tab::Inside => {
+                    if let Some(r) = res {
+                        if t.breakdown {
+                            self.breakdown(ui, p, t, r);
+                        } else {
+                            for it in r.items.iter().take(12) {
+                                ui.horizontal(|ui| {
+                                    if it.bytes > 0 {
+                                        ui.label(RichText::new(fmt_bytes(it.bytes)).monospace().size(11.5));
+                                        if ui.add(egui::Label::new(RichText::new(tilde(&it.path)).size(11.5).color(p.accent)).truncate().sense(Sense::click())).on_hover_text("Reveal in Finder").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                                            reveal(Path::new(&it.path));
+                                        }
+                                    } else {
+                                        ui.label(RichText::new(&it.path).monospace().size(11.0).color(p.muted));
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+                Tab::Clear => {
+                    let (fg, bg) = theme::badge_colors(t.safety, p);
+                    egui::Frame::new().fill(bg).corner_radius(8.0).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new(t.safety.label()).size(12.5).strong().color(fg));
+                        ui.label(RichText::new(t.safety.explain()).size(12.5));
+                    });
+                    if let Some(cmd) = t.cmd {
+                        ui.add_space(14.0);
+                        caption(ui, p, "Command");
+                        egui::Frame::new().fill(p.window).stroke(Stroke::new(1.0, p.border)).corner_radius(8.0).inner_margin(10).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(RichText::new(cmd).monospace().size(11.5));
+                        });
+                        ui.add_space(2.0);
+                        if ui.small_button("Copy command").clicked() {
+                            ui.ctx().copy_text(cmd.to_string());
+                        }
+                    }
+                    if t.breakdown && has_items {
+                        ui.add_space(10.0);
+                        ui.label(RichText::new("Each folder inside has its own advice. See the Inside tab.").size(12.0).color(p.muted));
+                    }
+                    ui.add_space(14.0);
+                    ui.label(RichText::new("DiskLens never deletes anything. You stay in control.").size(11.5).color(p.muted));
                 }
             }
             ui.add_space(14.0);
@@ -1130,7 +1181,7 @@ impl App {
 
     // ---------- explorer ----------
 
-    /// "What's inside": each subfolder with its owner, safety and how to clear it.
+    /// "What's inside": each subfolder as a compact row; click one for its owner, advice and command.
     fn breakdown(&mut self, ui: &mut egui::Ui, p: &Pal, t: &Target, r: &scan::TargetResult) {
         let rows: Vec<(&scan::Item, classify::Info)> = r
             .items
@@ -1147,58 +1198,69 @@ impl App {
                 by[Safety::ALL.iter().position(|s| *s == info.safety).unwrap_or(0)] += it.bytes;
             }
         }
-        ui.add_space(14.0);
-        caption(ui, p, "What's inside");
         let mut parts: Vec<(Color32, u64, &str)> = Safety::ALL.iter().zip(by).map(|(s, b)| (theme::badge_colors(*s, p).0, b, s.label())).collect();
         parts.insert(1, (LEFTOVER, leftover, "Leftover"));
         stacked(ui, p, &parts);
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let limit = if self.show_all_items { rows.len() } else { 15 };
         for (it, info) in rows.iter().take(limit) {
             let name = Path::new(&it.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            egui::Frame::new().fill(p.window).corner_radius(8.0).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.y = 2.0;
-                ui.horizontal(|ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(RichText::new(fmt_bytes(it.bytes)).monospace().size(12.0).strong());
-                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                            let resp = ui.add(egui::Label::new(RichText::new(&name).size(12.5).strong()).truncate().sense(Sense::click())).on_hover_text(format!("{}\nClick to reveal in Finder", it.path)).on_hover_cursor(egui::CursorIcon::PointingHand);
-                            if resp.clicked() {
-                                reveal(Path::new(&it.path));
-                            }
-                        });
-                    });
-                });
-                ui.horizontal(|ui| {
-                    if info.leftover {
-                        pill(ui, "Leftover", LEFTOVER, LEFTOVER.gamma_multiply(0.2)).on_hover_text("Belongs to an app that is no longer installed.");
-                    } else {
-                        safety_pill(ui, info.safety, p);
-                    }
-                    if !info.app.is_empty() {
-                        ui.label(RichText::new(&info.app).size(11.5).color(p.muted));
-                    }
-                });
-                ui.add(egui::Label::new(RichText::new(info.note).size(11.5).color(p.muted)).truncate()).on_hover_text(info.note);
-                if let Some(cmd) = info.cmd {
+            let open = self.open_item.as_deref() == Some(it.path.as_str());
+            let color = if info.leftover { LEFTOVER } else { theme::badge_colors(info.safety, p).0 };
+            let status = if info.leftover { "Leftover" } else { info.safety.label() };
+            let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.0), Sense::click());
+            if open || resp.hovered() {
+                ui.painter().rect_filled(rect, 6.0, p.hover);
+            }
+            ui.painter().circle_filled(rect.left_center() + Vec2::new(9.0, 0.0), 4.0, color);
+            let size = ui.painter().layout_no_wrap(fmt_bytes(it.bytes), egui::FontId::monospace(11.5), p.text);
+            let size_w = size.size().x;
+            ui.painter().galley(rect.right_center() - Vec2::new(8.0 + size_w, size.size().y / 2.0), size, p.text);
+            let mut job = egui::text::LayoutJob::single_section(name.clone(), egui::TextFormat { font_id: egui::FontId::proportional(12.5), color: p.text, ..Default::default() });
+            job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 22.0 - size_w - 16.0);
+            let g = ui.painter().layout_job(job);
+            ui.painter().galley(rect.left_center() + Vec2::new(20.0, -g.size().y / 2.0), g, p.text);
+            let app = if info.app.is_empty() { String::new() } else { format!(" · {}", info.app) };
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(format!("{name}\n{status}{app}\n{}\n\nClick for details", info.note));
+            if resp.clicked() {
+                self.open_item = if open { None } else { Some(it.path.clone()) };
+            }
+            if open {
+                egui::Frame::new().fill(p.window).corner_radius(8.0).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.spacing_mut().item_spacing.y = 4.0;
                     ui.horizontal(|ui| {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.small_button("Copy").clicked() {
+                        if info.leftover {
+                            pill(ui, "Leftover", LEFTOVER, LEFTOVER.gamma_multiply(0.2)).on_hover_text("Belongs to an app that is no longer installed.");
+                        } else {
+                            safety_pill(ui, info.safety, p);
+                        }
+                        if !info.app.is_empty() {
+                            ui.label(RichText::new(&info.app).size(11.5).color(p.muted));
+                        }
+                    });
+                    ui.label(RichText::new(info.note).size(12.0).color(p.muted));
+                    if let Some(cmd) = info.cmd {
+                        ui.label(RichText::new(cmd).monospace().size(11.0));
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.small_button("Reveal").on_hover_text("Show in Finder").clicked() {
+                            reveal(Path::new(&it.path));
+                        }
+                        if let Some(cmd) = info.cmd {
+                            if ui.small_button("Copy command").clicked() {
                                 ui.ctx().copy_text(cmd.to_string());
                             }
-                            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                                ui.add(egui::Label::new(RichText::new(cmd).monospace().size(11.0)).truncate()).on_hover_text(cmd);
-                            });
-                        });
+                        }
                     });
-                }
-            });
-            ui.add_space(2.0);
+                });
+                ui.add_space(4.0);
+            }
         }
         if rows.len() > 15 {
+            ui.add_space(4.0);
             let label = if self.show_all_items { "Show fewer".to_string() } else { format!("Show all {} folders", rows.len()) };
-            if ui.button(label).clicked() {
+            if ui.small_button(label).clicked() {
                 self.show_all_items = !self.show_all_items;
             }
         }

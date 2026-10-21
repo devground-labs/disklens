@@ -23,6 +23,7 @@ fn parse_args() -> app::Args {
             "--light" => a.theme = Some(egui::ThemePreference::Light),
             "--scan" => a.scan = true,
             "--group" => a.group = it.next().and_then(|g| g.parse().ok()),
+            "--tab" => a.tab = it.next(),
             "--dark" => a.theme = Some(egui::ThemePreference::Dark),
             _ => {}
         }
