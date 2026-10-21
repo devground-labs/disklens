@@ -73,5 +73,8 @@ cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "$NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 
-echo "Built $DMG"
+# Unversioned copy, so releases/latest/download/DiskLens.dmg always resolves.
+cp "$DMG" "$DIST/$NAME.dmg"
+
+echo "Built $DMG and $DIST/$NAME.dmg"
 shasum -a 256 "$DMG"
