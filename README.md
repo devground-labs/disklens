@@ -33,7 +33,7 @@ macOS lumps a lot of things into "System Data" and gives you no way to see what'
 
 ## Install
 
-1. Download the latest **DiskLens-x.y.z.dmg** from the [Releases page](https://github.com/devground-labs/disklens/releases/latest).
+1. Download [**DiskLens.dmg**](https://github.com/devground-labs/disklens/releases/latest/download/DiskLens.dmg) (or pick a version on the [Releases page](https://github.com/devground-labs/disklens/releases)).
 2. Open the dmg and drag **DiskLens** into **Applications**.
 3. The first time you open it, macOS will say it can't verify the app, because DiskLens isn't notarized by Apple yet. To approve it once:
    - Open **System Settings › Privacy & Security**, scroll down and click **Open Anyway** next to DiskLens (on older macOS, right-click the app and choose **Open**), or
