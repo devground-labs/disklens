@@ -72,6 +72,8 @@ pub struct App {
     ai: Arc<Mutex<ai_storage::AiState>>,
     ai_open: Option<&'static str>,
     ai_show_all: bool,
+    /// Scroll the open AI tool into view on the next frame.
+    ai_scroll: bool,
     filter: Option<Safety>,
     group: Option<Group>,
     show_all_items: bool,
@@ -469,6 +471,7 @@ impl App {
             ai: Arc::new(Mutex::new(ai_storage::AiState::Idle)),
             ai_open: args.select.as_deref().and_then(ai::find).map(|t| t.id),
             ai_show_all: false,
+            ai_scroll: false,
             filter: None,
             group: args.group.and_then(|i| Group::ALL.get(i).copied()),
             show_all_items: false,
@@ -693,6 +696,11 @@ impl App {
                         self.start_ai_scan(&ctx);
                     } else {
                         self.start_scan(&ctx);
+                    }
+                }
+                if on_ai {
+                    if let Some(when) = self.ai_scanned_label() {
+                        ui.label(RichText::new(when).size(11.5).color(p.muted));
                     }
                 }
                 if self.page == Page::Overview {
