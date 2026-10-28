@@ -1,5 +1,7 @@
+mod ai_storage;
 mod history;
 
+use crate::ai;
 use crate::scan::{self, ChildEntry, Progress, Snapshot};
 use crate::store;
 use crate::classify;
@@ -21,6 +23,7 @@ const AUTO_SCAN_AFTER_SECS: u64 = 6 * 3600;
 enum Page {
     Overview,
     History,
+    Ai,
     Explorer,
 }
 
@@ -42,6 +45,7 @@ pub struct Args {
     pub screenshot: Option<PathBuf>,
     pub page_explorer: bool,
     pub page_history: bool,
+    pub page_ai: bool,
     pub size: Option<[f32; 2]>,
     pub search: Option<String>,
     pub select: Option<String>,
@@ -65,6 +69,9 @@ pub struct App {
     scanning: Option<Arc<Progress>>,
     scan_result: Arc<Mutex<Option<Snapshot>>>,
     page: Page,
+    ai: Arc<Mutex<ai_storage::AiState>>,
+    ai_open: Option<&'static str>,
+    ai_show_all: bool,
     filter: Option<Safety>,
     group: Option<Group>,
     show_all_items: bool,
@@ -458,7 +465,10 @@ impl App {
             history,
             scanning: None,
             scan_result: Arc::new(Mutex::new(None)),
-            page: if args.page_explorer { Page::Explorer } else if args.page_history { Page::History } else { Page::Overview },
+            page: if args.page_explorer { Page::Explorer } else if args.page_history { Page::History } else if args.page_ai { Page::Ai } else { Page::Overview },
+            ai: Arc::new(Mutex::new(ai_storage::AiState::Idle)),
+            ai_open: args.select.as_deref().and_then(ai::find).map(|t| t.id),
+            ai_show_all: false,
             filter: None,
             group: args.group.and_then(|i| Group::ALL.get(i).copied()),
             show_all_items: false,
@@ -593,7 +603,7 @@ impl App {
         });
         ui.add_space(18.0);
         ui.label(RichText::new("  LIBRARY").size(10.5).color(p.muted));
-        for (page, label) in [(Page::Overview, "Overview"), (Page::History, "History"), (Page::Explorer, "Explorer")] {
+        for (page, label) in [(Page::Overview, "Overview"), (Page::History, "History"), (Page::Ai, "AI Storage"), (Page::Explorer, "Explorer")] {
             let on = self.page == page;
             let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 30.0), Sense::click());
             if on {
@@ -674,11 +684,16 @@ impl App {
         ui.horizontal(|ui| {
             ui.label(RichText::new(title).size(22.0).strong());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let scanning = self.scanning.is_some();
+                let on_ai = self.page == Page::Ai;
+                let scanning = if on_ai { self.ai_scanning() } else { self.scanning.is_some() };
                 let btn = egui::Button::new(RichText::new(if scanning { "Scanning…" } else { "Scan now" }).color(Color32::WHITE)).fill(p.accent).stroke(Stroke::NONE);
                 if ui.add_enabled(!scanning, btn).clicked() {
                     let ctx = ui.ctx().clone();
-                    self.start_scan(&ctx);
+                    if on_ai {
+                        self.start_ai_scan(&ctx);
+                    } else {
+                        self.start_scan(&ctx);
+                    }
                 }
                 if self.page == Page::Overview {
                     ui.add(egui::TextEdit::singleline(&mut self.search).hint_text("Search locations").desired_width(200.0));
@@ -1389,7 +1404,7 @@ impl App {
     fn screenshot_tick(&mut self, ctx: &egui::Context) {
         let Some(path) = self.args.screenshot.clone() else { return };
         self.frames += 1;
-        let ready = self.scanning.is_none() && !self.history.is_empty() && (self.page != Page::Explorer || matches!(&*self.explore.lock().unwrap(), ExploreState::Done(_)));
+        let ready = self.scanning.is_none() && !self.history.is_empty() && (self.page != Page::Explorer || matches!(&*self.explore.lock().unwrap(), ExploreState::Done(_))) && (self.page != Page::Ai || self.ai_ready());
         if ready && self.frames > 8 && !self.shot_requested {
             self.shot_requested = true;
             let c2 = ctx.clone();
@@ -1438,6 +1453,7 @@ impl eframe::App for App {
             let title = match (self.page, self.group) {
                 (Page::Explorer, _) => "Explorer",
                 (Page::History, _) => "History",
+                (Page::Ai, _) => "AI Storage",
                 (Page::Overview, Some(g)) => g.label(),
                 (Page::Overview, None) => "Overview",
             };
@@ -1463,6 +1479,7 @@ impl eframe::App for App {
                 }
                 (Page::Explorer, _) => self.explorer(ui, &p),
                 (Page::History, _) => self.history_page(ui, &p),
+                (Page::Ai, _) => self.ai_page(ui, &p, &disk),
             }
         });
     }
