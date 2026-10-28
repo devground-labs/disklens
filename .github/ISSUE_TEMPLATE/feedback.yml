@@ -1,0 +1,38 @@
+name: Feedback
+description: Tell us how DiskLens worked for you. Quick thoughts are welcome.
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying DiskLens. A few words is plenty.
+        Please don't paste folder names or screenshots you'd rather keep private.
+  - type: dropdown
+    id: result
+    attributes:
+      label: How did it go?
+      options:
+        - It worked and was useful
+        - It worked but wasn't that useful
+        - I couldn't get it to open or install
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: useful
+    attributes:
+      label: What was useful, confusing or missing?
+      description: Anything goes, such as a number that surprised you or a folder you wished it explained.
+    validations:
+      required: true
+  - type: textarea
+    id: install
+    attributes:
+      label: If you had trouble installing, what happened?
+      description: Optional. For example, the macOS "can't verify" warning, and whether Open Anyway worked.
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      description: Optional.
+      placeholder: "e.g. macOS 26.1"
