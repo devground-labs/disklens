@@ -26,6 +26,7 @@ macOS lumps a lot of things into "System Data" and gives you no way to see what'
 - **Folder-by-folder breakdown** of caches and app data, with each folder matched to the app that owns it.
 - **Leftover detection**: flags data and caches from apps you've uninstalled.
 - **Installer cleanup**: finds `.dmg` / `.pkg` / `.xip` files and tells you whether the app is already installed.
+- **AI Storage**: finds local models (Ollama, LM Studio, Hugging Face and more), coding-assistant and chat-app data, and ML caches. Shows each model or folder with its size, how safe it is to remove, and when it last changed, plus the command to remove it.
 - **History**: a chart of used space over time, with each cleanup marked and explained.
 - **Menu-bar monitor**: shows free space in the menu bar and sends a notification when it drops below a threshold you pick (5–50 GB).
 - **Explorer**: browse any folder, sorted by size.

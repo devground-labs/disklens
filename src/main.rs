@@ -1,3 +1,4 @@
+mod ai;
 mod app;
 mod classify;
 mod logo;
@@ -17,6 +18,7 @@ fn parse_args() -> app::Args {
             "--screenshot" => a.screenshot = it.next().map(Into::into),
             "--explorer" => a.page_explorer = true,
             "--history" => a.page_history = true,
+            "--ai" => a.page_ai = true,
             "--search" => a.search = it.next(),
             "--size" => a.size = it.next().and_then(|s| s.split_once('x').and_then(|(w, h)| Some([w.parse().ok()?, h.parse().ok()?]))),
             "--select" => a.select = it.next(),
