@@ -67,6 +67,10 @@ macOS hides some folders (Mail, Messages, other apps' containers) from apps by d
 
 Scan history, free-space samples and settings live in `~/Library/Application Support/DiskLens/`. Nothing is sent anywhere.
 
+## Feedback
+
+Tried DiskLens? [Tell us how it went](https://github.com/devground-labs/disklens/issues/new/choose). A few words is plenty, and it helps to hear what worked, what confused you and what was missing.
+
 ## Contributing
 
 Contributions are welcome: new cleanup locations, better explanations, bug fixes and UI improvements. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and submit changes. Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
